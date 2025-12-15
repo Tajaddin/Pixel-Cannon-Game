@@ -1,0 +1,48 @@
+{
+    "levelId": 0,
+    "levelName": "New Level",
+    "difficulty": 0,
+    "width": 16,
+    "height": 16,
+    "optimalMoves": 1,
+    "availableColors": [
+        1
+    ],
+    "pixelData": [
+        {
+            "x": 6,
+            "y": 5,
+            "color": 1
+        },
+        {
+            "x": 7,
+            "y": 5,
+            "color": 1
+        },
+        {
+            "x": 8,
+            "y": 5,
+            "color": 1
+        },
+        {
+            "x": 9,
+            "y": 5,
+            "color": 1
+        },
+        {
+            "x": 10,
+            "y": 5,
+            "color": 1
+        },
+        {
+            "x": 11,
+            "y": 5,
+            "color": 1
+        },
+        {
+            "x": 12,
+            "y": 5,
+            "color": 1
+        }
+    ]
+}

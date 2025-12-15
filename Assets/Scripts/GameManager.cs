@@ -9,7 +9,7 @@ public class GameManager : MonoBehaviour
     public static GameManager Instance { get; private set; }
 
     [Header("Game Settings")]
-    public int maxSlots = 5;
+    public int baseMaxSlots = 5;
     public float cannonSpeed = 10f;
     public float bubbleDropSpeed = 5f;
 
@@ -39,6 +39,21 @@ public class GameManager : MonoBehaviour
     private List<Cannon> cannonsInSlots = new List<Cannon>();
     private int totalPixelsToFill;
     private int pixelsFilled;
+    private bool isFirstCompletion = false;
+
+    // Dynamic max slots based on shop purchases
+    public int MaxSlots
+    {
+        get
+        {
+            int slots = baseMaxSlots;
+            if (ShopManager.Instance != null)
+            {
+                slots = ShopManager.Instance.CurrentMaxSlots;
+            }
+            return slots;
+        }
+    }
 
     void Awake()
     {
@@ -55,6 +70,50 @@ public class GameManager : MonoBehaviour
 
     void Start()
     {
+        InitializeManagers();
+        LoadLevelFromPlayerPrefs();
+    }
+
+    private void InitializeManagers()
+    {
+        // Ensure essential managers exist
+        if (CurrencyManager.Instance == null)
+        {
+            GameObject currencyObj = new GameObject("CurrencyManager");
+            currencyObj.AddComponent<CurrencyManager>();
+        }
+
+        if (ShopManager.Instance == null)
+        {
+            GameObject shopObj = new GameObject("ShopManager");
+            shopObj.AddComponent<ShopManager>();
+        }
+
+        if (AudioManager.Instance == null)
+        {
+            GameObject audioObj = new GameObject("AudioManager");
+            audioObj.AddComponent<AudioManager>();
+        }
+
+        // Subscribe to shop events
+        if (ShopManager.Instance != null)
+        {
+            ShopManager.Instance.OnSlotsChanged += OnSlotsChanged;
+        }
+    }
+
+    private void OnSlotsChanged()
+    {
+        // Update UI when slots change
+        uiManager?.UpdateSlots(cannonsInSlots.Count, MaxSlots);
+    }
+
+    private void LoadLevelFromPlayerPrefs()
+    {
+        // Load selected level and difficulty from PlayerPrefs (set by main menu)
+        currentLevelIndex = PlayerPrefs.GetInt("SelectedLevel", 0);
+        currentDifficulty = (Difficulty)PlayerPrefs.GetInt("SelectedDifficulty", 0);
+
         LoadLevel(currentLevelIndex, currentDifficulty);
     }
 
@@ -62,19 +121,23 @@ public class GameManager : MonoBehaviour
     {
         currentLevelIndex = levelIndex;
         currentDifficulty = difficulty;
-        
+
+        // Check if this is the first time playing this level
+        string key = $"Level_{currentDifficulty}_{currentLevelIndex}";
+        isFirstCompletion = PlayerPrefs.GetInt(key, 0) == 0;
+
         // Load level data from Resources
         string path = $"Levels/{difficulty}/{levelIndex}";
         TextAsset levelJson = Resources.Load<TextAsset>(path);
-        
+
         if (levelJson != null)
         {
             currentLevel = JsonUtility.FromJson<LevelData>(levelJson.text);
         }
         else
         {
-            // Generate a sample level if not found
-            currentLevel = LevelGenerator.GenerateSampleLevel(difficulty);
+            // Generate a procedural level if not found
+            currentLevel = LevelGenerator.GenerateLevel(levelIndex, difficulty);
         }
 
         StartLevel();
@@ -108,12 +171,16 @@ public class GameManager : MonoBehaviour
             uiManager.UpdateLevelInfo(currentLevelIndex + 1, currentDifficulty);
             uiManager.UpdateScore(score);
             uiManager.UpdateProgress(0, totalPixelsToFill);
+            uiManager.UpdateSlots(0, MaxSlots);
         }
+
+        // Play gameplay music
+        AudioManager.Instance?.PlayMusic("Gameplay");
     }
 
     public bool TryAddCannonToSlot(Cannon cannon)
     {
-        if (cannonsInSlots.Count >= maxSlots)
+        if (cannonsInSlots.Count >= MaxSlots)
         {
             // Slots are full - fire the cannons!
             FireCannons();
@@ -121,15 +188,21 @@ public class GameManager : MonoBehaviour
         }
 
         cannonsInSlots.Add(cannon);
-        
+
         // Position cannon in slot
         if (cannonSlots != null && cannonsInSlots.Count <= cannonSlots.Length)
         {
             cannon.MoveToSlot(cannonSlots[cannonsInSlots.Count - 1].position);
         }
 
+        // Update UI
+        uiManager?.UpdateSlots(cannonsInSlots.Count, MaxSlots);
+
+        // Play sound
+        AudioManager.Instance?.PlaySFX("SlotFill");
+
         // Check if slots are full
-        if (cannonsInSlots.Count >= maxSlots)
+        if (cannonsInSlots.Count >= MaxSlots)
         {
             FireCannons();
         }
@@ -156,13 +229,23 @@ public class GameManager : MonoBehaviour
             score += pixelsHit * 10;
             movesUsed++;
 
+            // Apply coin multiplier from shop
+            float coinMultiplier = ShopManager.Instance?.GetCoinMultiplier() ?? 1f;
+            int coinBonus = Mathf.RoundToInt(pixelsHit * coinMultiplier);
+
             // Update UI
             uiManager?.UpdateScore(score);
             uiManager?.UpdateProgress(pixelsFilled, totalPixelsToFill);
 
+            // Play sound for pixel fill
+            if (pixelsHit > 0)
+            {
+                AudioManager.Instance?.PlaySFX("PixelFill");
+            }
+
             // Animate cannon firing
             yield return StartCoroutine(cannon.FireAnimation());
-            
+
             // Small delay between cannons
             yield return new WaitForSeconds(0.2f);
         }
@@ -173,6 +256,9 @@ public class GameManager : MonoBehaviour
             Destroy(cannon.gameObject);
         }
         cannonsInSlots.Clear();
+
+        // Update slots UI
+        uiManager?.UpdateSlots(0, MaxSlots);
 
         // Check win condition
         if (pixelsFilled >= totalPixelsToFill)
@@ -194,21 +280,47 @@ public class GameManager : MonoBehaviour
 
         // Calculate stars based on moves
         int stars = CalculateStars();
-        
+
+        // Award coins
+        AwardCoins(stars);
+
         // Save progress
         SaveProgress(stars);
+
+        // Play victory music
+        AudioManager.Instance?.PlayMusic("Victory");
+
+        // Vibrate
+        AudioManager.Instance?.Vibrate();
 
         // Trigger event
         OnLevelComplete?.Invoke();
 
         // Show UI
         uiManager?.ShowLevelComplete(score, stars, movesUsed);
+
+        // Show interstitial ad occasionally
+        AdManager.Instance?.ShowInterstitialAd();
+    }
+
+    private void AwardCoins(int stars)
+    {
+        if (CurrencyManager.Instance != null)
+        {
+            CurrencyManager.Instance.AwardLevelCompletion(
+                currentDifficulty,
+                stars,
+                movesUsed,
+                currentLevel.optimalMoves,
+                isFirstCompletion
+            );
+        }
     }
 
     private int CalculateStars()
     {
         int optimalMoves = currentLevel.optimalMoves;
-        
+
         if (movesUsed <= optimalMoves)
             return 3;
         else if (movesUsed <= optimalMoves * 1.5f)
@@ -221,7 +333,7 @@ public class GameManager : MonoBehaviour
     {
         string key = $"Level_{currentDifficulty}_{currentLevelIndex}";
         int previousStars = PlayerPrefs.GetInt(key, 0);
-        
+
         if (stars > previousStars)
         {
             PlayerPrefs.SetInt(key, stars);
@@ -240,6 +352,23 @@ public class GameManager : MonoBehaviour
     public void NextLevel()
     {
         currentLevelIndex++;
+
+        // Check if we need to unlock the next difficulty
+        if (currentLevelIndex >= 250)
+        {
+            // Move to next difficulty if available
+            if ((int)currentDifficulty < 3)
+            {
+                currentDifficulty = (Difficulty)((int)currentDifficulty + 1);
+                currentLevelIndex = 0;
+            }
+            else
+            {
+                // All levels complete!
+                currentLevelIndex = 249;
+            }
+        }
+
         LoadLevel(currentLevelIndex, currentDifficulty);
     }
 
@@ -250,6 +379,7 @@ public class GameManager : MonoBehaviour
 
     public void GoToMainMenu()
     {
+        Time.timeScale = 1f;
         SceneManager.LoadScene("MainMenu");
     }
 
@@ -265,6 +395,25 @@ public class GameManager : MonoBehaviour
         isGameActive = true;
         Time.timeScale = 1f;
         uiManager?.HidePauseMenu();
+    }
+
+    public int GetSlotsUsed()
+    {
+        return cannonsInSlots.Count;
+    }
+
+    public int GetSlotsRemaining()
+    {
+        return MaxSlots - cannonsInSlots.Count;
+    }
+
+    void OnDestroy()
+    {
+        // Unsubscribe from events
+        if (ShopManager.Instance != null)
+        {
+            ShopManager.Instance.OnSlotsChanged -= OnSlotsChanged;
+        }
     }
 }
 

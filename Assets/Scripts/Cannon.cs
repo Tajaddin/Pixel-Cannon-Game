@@ -2,7 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
-using TMPro; // Added for TextMeshPro
+using TMPro;
 
 public class Cannon : MonoBehaviour, IPointerClickHandler, IDragHandler, IBeginDragHandler, IEndDragHandler
 {
@@ -18,6 +18,8 @@ public class Cannon : MonoBehaviour, IPointerClickHandler, IDragHandler, IBeginD
     [Header("State")]
     public bool isInSlot = false;
     public bool isDragging = false;
+    public bool isSelectable = true; // Only front row is selectable
+    public int lineIndex = 0; // Which line this cannon is in (0 = front, 1 = middle, 2 = back)
 
     private Vector3 originalPosition;
     private Vector3 dragOffset;
@@ -27,7 +29,6 @@ public class Cannon : MonoBehaviour, IPointerClickHandler, IDragHandler, IBeginD
     void Start()
     {
         mainCamera = Camera.main;
-        // FIX: Updated to FindFirstObjectByType to avoid obsolete warning
         cannonManager = Object.FindFirstObjectByType<CannonManager>();
         originalPosition = transform.position;
     }
@@ -36,7 +37,13 @@ public class Cannon : MonoBehaviour, IPointerClickHandler, IDragHandler, IBeginD
     {
         cannonColor = color;
         power = cannonPower;
-        
+
+        // Apply power multiplier from shop
+        if (ShopManager.Instance != null)
+        {
+            power = Mathf.RoundToInt(power * ShopManager.Instance.GetPowerMultiplier());
+        }
+
         UpdateVisuals();
     }
 
@@ -63,6 +70,35 @@ public class Cannon : MonoBehaviour, IPointerClickHandler, IDragHandler, IBeginD
                 mr.material.color = GetColorValue(cannonColor);
             }
         }
+
+        // Visual feedback for selectability
+        UpdateSelectableVisual();
+    }
+
+    public void SetSelectable(bool selectable)
+    {
+        isSelectable = selectable;
+        UpdateSelectableVisual();
+    }
+
+    private void UpdateSelectableVisual()
+    {
+        // Dim non-selectable cannons
+        float alpha = isSelectable ? 1f : 0.5f;
+
+        if (bodyRenderer != null)
+        {
+            Color c = bodyRenderer.color;
+            c.a = alpha;
+            bodyRenderer.color = c;
+        }
+
+        if (colorIndicator != null)
+        {
+            Color c = colorIndicator.color;
+            c.a = alpha;
+            colorIndicator.color = c;
+        }
     }
 
     private Color GetColorValue(GameColor color)
@@ -85,8 +121,18 @@ public class Cannon : MonoBehaviour, IPointerClickHandler, IDragHandler, IBeginD
 
     public void OnPointerClick(PointerEventData eventData)
     {
-        // Only select if not already in slot and game is active
-        if (!isInSlot && GameManager.Instance != null && GameManager.Instance.isGameActive)
+        // Only select if selectable (front row) and game is active
+        if (!isSelectable || isInSlot)
+        {
+            // Show feedback that this cannon isn't selectable
+            if (!isSelectable)
+            {
+                StartCoroutine(ShakeAnimation());
+            }
+            return;
+        }
+
+        if (GameManager.Instance != null && GameManager.Instance.isGameActive)
         {
             SelectCannon();
         }
@@ -94,12 +140,15 @@ public class Cannon : MonoBehaviour, IPointerClickHandler, IDragHandler, IBeginD
 
     public void OnBeginDrag(PointerEventData eventData)
     {
-        if (isInSlot || GameManager.Instance == null || !GameManager.Instance.isGameActive) return;
+        if (!isSelectable || isInSlot || GameManager.Instance == null || !GameManager.Instance.isGameActive) return;
 
         isDragging = true;
         Vector3 mousePos = mainCamera.ScreenToWorldPoint(eventData.position);
         mousePos.z = 0;
         dragOffset = transform.position - mousePos;
+
+        // Play pickup sound
+        AudioManager.Instance?.PlaySFX("CannonSelect");
     }
 
     public void OnDrag(PointerEventData eventData)
@@ -125,39 +174,76 @@ public class Cannon : MonoBehaviour, IPointerClickHandler, IDragHandler, IBeginD
         else
         {
             // Return to original position
-            transform.position = originalPosition;
+            StartCoroutine(ReturnToPosition());
         }
     }
 
     private bool IsOverSlotArea()
     {
         if (mainCamera == null) return false;
-        
+
         // Check if cannon is in the upper portion of the screen (slot area)
         float screenHeight = mainCamera.orthographicSize * 2;
         float slotAreaY = mainCamera.transform.position.y + screenHeight * 0.2f;
-        
+
         return transform.position.y > slotAreaY;
     }
 
     public void SelectCannon()
     {
-        if (isInSlot) return;
+        if (isInSlot || !isSelectable) return;
 
         bool added = GameManager.Instance.TryAddCannonToSlot(this);
         if (added)
         {
             isInSlot = true;
-            cannonManager?.RemoveCannonFromPool(this);
+            cannonManager?.OnCannonSelected(this);
+            AudioManager.Instance?.PlaySFX("SlotFill");
         }
         else
         {
             // Return to original position if slots are full
-            transform.position = originalPosition;
+            StartCoroutine(ReturnToPosition());
         }
     }
 
-    // FIX: Restored MoveToSlot method needed by GameManager
+    private IEnumerator ReturnToPosition()
+    {
+        float duration = 0.2f;
+        float elapsed = 0f;
+        Vector3 startPos = transform.position;
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / duration;
+            t = 1f - Mathf.Pow(1f - t, 2f); // Ease out
+
+            transform.position = Vector3.Lerp(startPos, originalPosition, t);
+            yield return null;
+        }
+
+        transform.position = originalPosition;
+    }
+
+    private IEnumerator ShakeAnimation()
+    {
+        Vector3 startPos = transform.position;
+        float duration = 0.3f;
+        float elapsed = 0f;
+        float shakeAmount = 0.1f;
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float x = Mathf.Sin(elapsed * 50f) * shakeAmount * (1f - elapsed / duration);
+            transform.position = startPos + new Vector3(x, 0, 0);
+            yield return null;
+        }
+
+        transform.position = startPos;
+    }
+
     public void MoveToSlot(Vector3 slotPosition)
     {
         StartCoroutine(MoveToSlotAnimation(slotPosition));
@@ -182,13 +268,39 @@ public class Cannon : MonoBehaviour, IPointerClickHandler, IDragHandler, IBeginD
         transform.position = targetPos;
     }
 
-    // FIX: Restored FireAnimation method needed by GameManager
+    public void MoveToNewPosition(Vector3 newPosition, float duration = 0.3f)
+    {
+        originalPosition = newPosition;
+        StartCoroutine(MoveToPositionAnimation(newPosition, duration));
+    }
+
+    private IEnumerator MoveToPositionAnimation(Vector3 targetPos, float duration)
+    {
+        float elapsed = 0f;
+        Vector3 startPos = transform.position;
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / duration;
+            t = t * t * (3f - 2f * t); // Smoothstep
+
+            transform.position = Vector3.Lerp(startPos, targetPos, t);
+            yield return null;
+        }
+
+        transform.position = targetPos;
+    }
+
     public IEnumerator FireAnimation()
     {
         // Scale up
         float duration = 0.2f;
         float elapsed = 0f;
         Vector3 originalScale = transform.localScale;
+
+        // Play fire sound
+        AudioManager.Instance?.PlaySFX("CannonFire");
 
         while (elapsed < duration)
         {
@@ -212,48 +324,74 @@ public class Cannon : MonoBehaviour, IPointerClickHandler, IDragHandler, IBeginD
     }
 }
 
-// FIX: Restored full CannonManager implementation
+/// <summary>
+/// Enhanced CannonManager with 3-line queue system
+/// </summary>
 public class CannonManager : MonoBehaviour
 {
     [Header("Spawn Settings")]
     public Transform spawnArea;
     public GameObject cannonPrefab;
-    public int initialCannons = 6;
-    public int maxCannonsOnScreen = 12;
 
-    [Header("Spawn Grid")]
-    public int columns = 4;
-    public int rows = 3;
-    public float cannonSpacing = 1.5f;
+    [Header("Queue Settings")]
+    public int cannonsPerLine = 4;  // 4 cannons per line
+    public int numberOfLines = 3;   // 3 lines total
+    public float lineSpacing = 1.5f; // Vertical space between lines
+    public float cannonSpacing = 1.3f; // Horizontal space between cannons
 
-    private List<Cannon> cannonPool = new List<Cannon>();
+    [Header("Visual")]
+    public float lineScale = 0.9f; // Back lines slightly smaller
+
+    private List<List<Cannon>> cannonLines = new List<List<Cannon>>();
     private LevelData currentLevel;
 
-    // FIX: Restored SpawnInitialCannons
+    public List<Cannon> FrontLine => cannonLines.Count > 0 ? cannonLines[0] : new List<Cannon>();
+
     public void SpawnInitialCannons(LevelData level)
     {
         currentLevel = level;
         ClearAllCannons();
-        SpawnNewCannons(initialCannons);
-    }
 
-    // FIX: Restored SpawnNewCannons
-    public void SpawnNewCannons(int count)
-    {
-        if (currentLevel == null) return;
-
-        for (int i = 0; i < count && cannonPool.Count < maxCannonsOnScreen; i++)
+        // Initialize lines
+        for (int i = 0; i < numberOfLines; i++)
         {
-            SpawnCannon();
+            cannonLines.Add(new List<Cannon>());
         }
 
-        ArrangeCannons();
+        // Spawn cannons for all lines
+        for (int line = 0; line < numberOfLines; line++)
+        {
+            for (int i = 0; i < cannonsPerLine; i++)
+            {
+                SpawnCannonInLine(line);
+            }
+        }
+
+        UpdateCannonSelectability();
+        ArrangeAllCannons(false);
     }
 
-    private void SpawnCannon()
+    public void SpawnNewCannons(int count)
     {
+        // This is called after firing - add cannons to the back line
+        for (int i = 0; i < count; i++)
+        {
+            // Add to the last line
+            if (cannonLines.Count > 0 && cannonLines[numberOfLines - 1].Count < cannonsPerLine)
+            {
+                SpawnCannonInLine(numberOfLines - 1);
+            }
+        }
+
+        ArrangeAllCannons(true);
+    }
+
+    private void SpawnCannonInLine(int lineIndex)
+    {
+        if (lineIndex < 0 || lineIndex >= cannonLines.Count) return;
+
         GameObject cannonObj;
-        
+
         if (cannonPrefab != null)
         {
             cannonObj = Instantiate(cannonPrefab, transform);
@@ -272,9 +410,15 @@ public class CannonManager : MonoBehaviour
         // Randomize cannon properties based on level
         GameColor color = GetRandomColorFromLevel();
         int power = GetRandomPower();
-        
+
         cannon.Initialize(color, power);
-        cannonPool.Add(cannon);
+        cannon.lineIndex = lineIndex;
+
+        // Scale based on line (back lines smaller)
+        float scale = 1f - (lineIndex * (1f - lineScale) / numberOfLines);
+        cannonObj.transform.localScale = Vector3.one * scale;
+
+        cannonLines[lineIndex].Add(cannon);
     }
 
     private GameObject CreateDefaultCannon()
@@ -288,14 +432,14 @@ public class CannonManager : MonoBehaviour
         body.transform.parent = cannon.transform;
         body.transform.localPosition = Vector3.zero;
         body.transform.localScale = new Vector3(0.8f, 1f, 0.3f);
-        
+
         Collider col = body.GetComponent<Collider>();
         if (col != null) Destroy(col);
 
         // Add collider for clicks
         BoxCollider2D boxCol = cannon.AddComponent<BoxCollider2D>();
         boxCol.size = new Vector2(1f, 1.2f);
-        
+
         // Add minimal mesh renderer for visuals
         MeshRenderer mr = body.GetComponent<MeshRenderer>();
         if (mr != null) mr.material = new Material(Shader.Find("Sprites/Default"));
@@ -331,48 +475,156 @@ public class CannonManager : MonoBehaviour
         return Random.Range(10, 40);
     }
 
-    private void ArrangeCannons()
+    private void ArrangeAllCannons(bool animate)
     {
         if (spawnArea == null) spawnArea = transform;
 
-        float startX = spawnArea.position.x - (columns - 1) * cannonSpacing / 2f;
-        float startY = spawnArea.position.y;
-
-        for (int i = 0; i < cannonPool.Count; i++)
+        for (int line = 0; line < cannonLines.Count; line++)
         {
-            int col = i % columns;
-            int row = i / columns;
+            ArrangeLine(line, animate);
+        }
+    }
 
-            Vector3 pos = new Vector3(
-                startX + col * cannonSpacing,
-                startY - row * cannonSpacing,
-                0
-            );
+    private void ArrangeLine(int lineIndex, bool animate)
+    {
+        if (lineIndex >= cannonLines.Count) return;
 
-            cannonPool[i].transform.position = pos;
+        List<Cannon> line = cannonLines[lineIndex];
+        int count = line.Count;
+
+        float startX = spawnArea.position.x - (count - 1) * cannonSpacing / 2f;
+        float yPos = spawnArea.position.y - lineIndex * lineSpacing;
+
+        // Back lines are slightly faded and smaller
+        float zPos = lineIndex * 0.1f; // Slight depth offset
+
+        for (int i = 0; i < count; i++)
+        {
+            Vector3 pos = new Vector3(startX + i * cannonSpacing, yPos, zPos);
+
+            if (animate)
+            {
+                line[i].MoveToNewPosition(pos, 0.3f);
+            }
+            else
+            {
+                line[i].transform.position = pos;
+            }
+        }
+    }
+
+    private void UpdateCannonSelectability()
+    {
+        // Only front line (index 0) is selectable
+        for (int line = 0; line < cannonLines.Count; line++)
+        {
+            bool isSelectable = (line == 0);
+            foreach (Cannon cannon in cannonLines[line])
+            {
+                cannon.SetSelectable(isSelectable);
+            }
+        }
+    }
+
+    public void OnCannonSelected(Cannon cannon)
+    {
+        // Remove from its line
+        foreach (var line in cannonLines)
+        {
+            if (line.Remove(cannon))
+            {
+                break;
+            }
+        }
+
+        // Shift lines forward
+        ShiftLinesForward();
+
+        // Respawn cannon in back line
+        if (cannonLines[numberOfLines - 1].Count < cannonsPerLine)
+        {
+            SpawnCannonInLine(numberOfLines - 1);
+        }
+
+        UpdateCannonSelectability();
+        ArrangeAllCannons(true);
+    }
+
+    private void ShiftLinesForward()
+    {
+        // Move cannons from back lines to front to fill gaps
+        for (int line = 0; line < numberOfLines - 1; line++)
+        {
+            while (cannonLines[line].Count < cannonsPerLine && cannonLines[line + 1].Count > 0)
+            {
+                // Move cannon from next line to this line
+                Cannon cannon = cannonLines[line + 1][0];
+                cannonLines[line + 1].RemoveAt(0);
+                cannonLines[line].Add(cannon);
+                cannon.lineIndex = line;
+
+                // Update scale
+                float scale = 1f - (line * (1f - lineScale) / numberOfLines);
+                cannon.transform.localScale = Vector3.one * scale;
+            }
         }
     }
 
     public void RemoveCannonFromPool(Cannon cannon)
     {
-        if (cannonPool.Contains(cannon))
+        foreach (var line in cannonLines)
         {
-            cannonPool.Remove(cannon);
-            ArrangeCannons();
+            line.Remove(cannon);
         }
     }
 
     private void ClearAllCannons()
     {
-        foreach (Cannon cannon in cannonPool)
+        foreach (var line in cannonLines)
         {
-            if (cannon != null) Destroy(cannon.gameObject);
+            foreach (Cannon cannon in line)
+            {
+                if (cannon != null) Destroy(cannon.gameObject);
+            }
+            line.Clear();
         }
-        cannonPool.Clear();
+        cannonLines.Clear();
     }
 
     public int GetRemainingCannons()
     {
-        return cannonPool.Count;
+        int total = 0;
+        foreach (var line in cannonLines)
+        {
+            total += line.Count;
+        }
+        return total;
+    }
+
+    /// <summary>
+    /// Get cannons that are coming next (for preview)
+    /// </summary>
+    public List<Cannon> GetUpcomingCannons(int count)
+    {
+        List<Cannon> upcoming = new List<Cannon>();
+
+        // First, add all front line cannons
+        foreach (Cannon c in cannonLines[0])
+        {
+            if (upcoming.Count >= count) break;
+            upcoming.Add(c);
+        }
+
+        // Then add from subsequent lines
+        for (int line = 1; line < numberOfLines && upcoming.Count < count; line++)
+        {
+            foreach (Cannon c in cannonLines[line])
+            {
+                if (upcoming.Count >= count) break;
+                upcoming.Add(c);
+            }
+        }
+
+        return upcoming;
     }
 }

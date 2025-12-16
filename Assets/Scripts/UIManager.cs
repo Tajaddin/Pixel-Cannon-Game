@@ -77,7 +77,7 @@ public class UIManager : MonoBehaviour
         if (mainMenuButton != null)
             mainMenuButton.onClick.AddListener(() => {
                 Time.timeScale = 1f;
-                SceneManager.LoadScene("MainMenu");
+                LoadMainMenu();
             });
 
         // Level complete buttons
@@ -94,7 +94,7 @@ public class UIManager : MonoBehaviour
             });
 
         if (homeButton != null)
-            homeButton.onClick.AddListener(() => SceneManager.LoadScene("MainMenu"));
+            homeButton.onClick.AddListener(() => LoadMainMenu());
 
         // Fire button
         if (fireButton != null)
@@ -335,5 +335,27 @@ public class UIManager : MonoBehaviour
     public void SetVibration(bool enabled)
     {
         PlayerPrefs.SetInt("Vibration", enabled ? 1 : 0);
+    }
+
+    private void LoadMainMenu()
+    {
+        // Try to load MainMenu scene, fall back to first scene in build settings
+        try
+        {
+            if (Application.CanStreamedLevelBeLoaded("MainMenu"))
+            {
+                SceneManager.LoadScene("MainMenu");
+            }
+            else
+            {
+                // MainMenu scene doesn't exist, load first scene (index 0)
+                SceneManager.LoadScene(0);
+            }
+        }
+        catch
+        {
+            // Fallback: reload current scene
+            SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+        }
     }
 }

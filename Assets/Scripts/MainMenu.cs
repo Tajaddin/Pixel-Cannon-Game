@@ -47,12 +47,96 @@ public class MainMenu : MonoBehaviour
 
     void Start()
     {
+        // Auto-find UI elements if not assigned in Inspector
+        AutoFindUIElements();
+
         SetupButtons();
         ShowMainPanel();
         LoadSettings();
-        
+
         // Play background music if you have an audio manager
         // AudioManager.Instance?.PlayMusic("MainMenu");
+    }
+
+    private void AutoFindUIElements()
+    {
+        // Auto-find panels by name
+        if (mainPanel == null) mainPanel = FindChildByName("MainPanel");
+        if (difficultyPanel == null) difficultyPanel = FindChildByName("DifficultyPanel");
+        if (levelSelectPanel == null) levelSelectPanel = FindChildByName("LevelSelectPanel");
+        if (settingsPanel == null) settingsPanel = FindChildByName("SettingsPanel");
+        if (creditsPanel == null) creditsPanel = FindChildByName("CreditsPanel");
+
+        // Auto-find main buttons by name
+        if (playButton == null) playButton = FindButtonByName("PlayButton");
+        if (settingsButton == null) settingsButton = FindButtonByName("SettingsButton");
+        if (creditsButton == null) creditsButton = FindButtonByName("CreditsButton");
+        if (quitButton == null) quitButton = FindButtonByName("QuitButton");
+
+        // Auto-find difficulty buttons
+        if (easyButton == null) easyButton = FindButtonByName("EasyButton");
+        if (mediumButton == null) mediumButton = FindButtonByName("MediumButton");
+        if (hardButton == null) hardButton = FindButtonByName("HardButton");
+        if (superHardButton == null) superHardButton = FindButtonByName("SuperHardButton");
+        if (backFromDifficultyButton == null) backFromDifficultyButton = FindButtonByName("BackFromDifficultyButton");
+
+        // Auto-find level select elements
+        if (backFromLevelSelectButton == null) backFromLevelSelectButton = FindButtonByName("BackFromLevelSelectButton");
+        if (levelGridContainer == null)
+        {
+            GameObject grid = FindChildByName("LevelGrid");
+            if (grid != null) levelGridContainer = grid.transform;
+        }
+
+        // Auto-find settings elements
+        if (backFromSettingsButton == null) backFromSettingsButton = FindButtonByName("BackFromSettingsButton");
+        if (musicSlider == null) musicSlider = FindSliderByName("MusicSlider");
+        if (sfxSlider == null) sfxSlider = FindSliderByName("SFXSlider");
+        if (vibrationToggle == null) vibrationToggle = FindToggleByName("VibrationToggle");
+    }
+
+    private GameObject FindChildByName(string name)
+    {
+        // Search in this object's hierarchy first
+        Transform found = FindInChildren(transform, name);
+        if (found != null) return found.gameObject;
+
+        // Search entire scene as fallback
+        GameObject[] allObjects = FindObjectsByType<GameObject>(FindObjectsSortMode.None);
+        foreach (var obj in allObjects)
+        {
+            if (obj.name == name) return obj;
+        }
+        return null;
+    }
+
+    private Transform FindInChildren(Transform parent, string name)
+    {
+        foreach (Transform child in parent)
+        {
+            if (child.name == name) return child;
+            Transform found = FindInChildren(child, name);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private Button FindButtonByName(string name)
+    {
+        GameObject obj = FindChildByName(name);
+        return obj != null ? obj.GetComponent<Button>() : null;
+    }
+
+    private Slider FindSliderByName(string name)
+    {
+        GameObject obj = FindChildByName(name);
+        return obj != null ? obj.GetComponent<Slider>() : null;
+    }
+
+    private Toggle FindToggleByName(string name)
+    {
+        GameObject obj = FindChildByName(name);
+        return obj != null ? obj.GetComponent<Toggle>() : null;
     }
 
     private void SetupButtons()

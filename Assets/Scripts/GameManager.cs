@@ -250,7 +250,16 @@ public class GameManager : MonoBehaviour
 
     public void GoToMainMenu()
     {
-        SceneManager.LoadScene("MainMenu");
+        // Try to load MainMenu scene, fall back to first scene in build settings
+        if (Application.CanStreamedLevelBeLoaded("MainMenu"))
+        {
+            SceneManager.LoadScene("MainMenu");
+        }
+        else
+        {
+            // MainMenu scene doesn't exist, load first scene (index 0)
+            SceneManager.LoadScene(0);
+        }
     }
 
     public void PauseGame()
